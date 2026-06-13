@@ -993,8 +993,8 @@ class RocmDtypeTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(host.dtype, torch.bfloat16)
 
-    def test_initialize_service_uses_float16_on_pre_ampere_cuda(self):
-        """It falls back to float16 on pre-Ampere CUDA GPUs."""
+    def test_initialize_service_uses_float32_on_pre_ampere_cuda(self):
+        """It uses float32 on pre-Ampere CUDA GPUs for lyric/DiT stability."""
         host = self._make_rocm_host()
 
         def _fake_load_main_model(**_kwargs):
@@ -1028,7 +1028,7 @@ class RocmDtypeTests(unittest.TestCase):
                                         device="cuda",
                                     )
         self.assertTrue(ok)
-        self.assertEqual(host.dtype, torch.float16)
+        self.assertEqual(host.dtype, torch.float32)
 
     def test_get_vae_dtype_returns_self_dtype_on_rocm(self):
         """It defers to self.dtype for VAE when ROCm is active."""

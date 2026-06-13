@@ -10,12 +10,6 @@ from loguru import logger
 
 from acestep import gpu_config
 
-_ROCM_DTYPE_MAP = {
-    "float32": torch.float32,
-    "float16": torch.float16,
-    "bfloat16": torch.bfloat16,
-}
-
 
 def _cuda_supports_bfloat16() -> bool:
     """Return whether the active CUDA device supports native bfloat16 kernels."""
@@ -23,23 +17,8 @@ def _cuda_supports_bfloat16() -> bool:
 
 
 def _resolve_rocm_dtype() -> torch.dtype:
-    """Return a safe model dtype for ROCm/HIP devices.
-
-    Uses ``float32`` by default to avoid segfaults from incomplete
-    ``bfloat16`` kernel support on some ROCm GPU configurations (e.g.
-    AMD iGPUs on Strix Halo).  Set the ``ACESTEP_ROCM_DTYPE`` environment
-    variable to ``float16`` or ``bfloat16`` to override for hardware that
-    fully supports those formats.
-    """
-    raw = os.environ.get("ACESTEP_ROCM_DTYPE", "float32").strip().lower()
-    dtype = _ROCM_DTYPE_MAP.get(raw)
-    if dtype is None:
-        logger.warning(
-            f"[initialize_service] Unknown ACESTEP_ROCM_DTYPE={raw!r}; "
-            "falling back to float32."
-        )
-        dtype = torch.float32
-    return dtype
+    """Return a safe model dtype for ROCm/HIP devices."""
+    return gpu_config.resolve_rocm_compute_dtype()
 
 
 class InitServiceOrchestratorMixin:
@@ -82,23 +61,8 @@ class InitServiceOrchestratorMixin:
                 quantization=quantization,
             )
             self.compiled = normalized_compile
-            if resolved_device == "cuda" and gpu_config.is_rocm_available():
-                self.dtype = _resolve_rocm_dtype()
-                logger.info(
-                    f"[initialize_service] ROCm/HIP device detected: using dtype={self.dtype} "
-                    "(set ACESTEP_ROCM_DTYPE=bfloat16 or float16 to override)"
-                )
-            elif resolved_device == "cuda":
-                if gpu_config.cuda_supports_bfloat16():
-                    self.dtype = torch.bfloat16
-                else:
-                    self.dtype = torch.float16
-                    logger.info(
-                        "[initialize_service] Pre-Ampere CUDA detected: "
-                        "using float16 instead of bfloat16."
-                    )
-            else:
-                self.dtype = torch.bfloat16 if resolved_device == "xpu" else torch.float32
+            self.dtype = gpu_config.resolve_compute_dtype(resolved_device)
+            logger.info(f"[initialize_service] Using compute dtype={self.dtype}")
             self.quantization = normalized_quantization
             try:
                 self._validate_quantization_setup(
