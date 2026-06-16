@@ -82,5 +82,57 @@ class AutoMlxVaeChunkSizeTests(unittest.TestCase):
         self.assertEqual(_auto_mlx_vae_chunk_size(mem_gb=65), 2048)
 
 
+class ResolveComputeDtypeTests(unittest.TestCase):
+    """Tests for handler compute dtype resolution on CUDA and env overrides."""
+
+    def test_pre_ampere_cuda_defaults_to_float32(self) -> None:
+        """T4/V100-class GPUs should avoid float16 lyric-conditioning overflow."""
+        import torch
+
+        with patch("acestep.gpu_config.is_rocm_available", return_value=False), patch(
+            "acestep.gpu_config.cuda_supports_bfloat16",
+            return_value=False,
+        ), patch.dict("os.environ", {}, clear=True):
+            from acestep.gpu_config import resolve_compute_dtype
+
+            self.assertEqual(resolve_compute_dtype("cuda"), torch.float32)
+
+    def test_ampere_cuda_uses_bfloat16(self) -> None:
+        """Ampere+ GPUs should keep bfloat16 when no env override is set."""
+        import torch
+
+        with patch("acestep.gpu_config.is_rocm_available", return_value=False), patch(
+            "acestep.gpu_config.cuda_supports_bfloat16",
+            return_value=True,
+        ), patch.dict("os.environ", {}, clear=True):
+            from acestep.gpu_config import resolve_compute_dtype
+
+            self.assertEqual(resolve_compute_dtype("cuda:0"), torch.bfloat16)
+
+    def test_acestep_dtype_env_overrides_pre_ampere_default(self) -> None:
+        """ACESTEP_DTYPE should override automatic pre-Ampere float32 selection."""
+        import torch
+
+        with patch("acestep.gpu_config.is_rocm_available", return_value=False), patch(
+            "acestep.gpu_config.cuda_supports_bfloat16",
+            return_value=False,
+        ), patch.dict("os.environ", {"ACESTEP_DTYPE": "float16"}):
+            from acestep.gpu_config import resolve_compute_dtype
+
+            self.assertEqual(resolve_compute_dtype("cuda"), torch.float16)
+
+    def test_acestep_dtype_float32_env_on_cuda(self) -> None:
+        """Explicit ACESTEP_DTYPE=float32 should be honored on all CUDA tiers."""
+        import torch
+
+        with patch("acestep.gpu_config.is_rocm_available", return_value=False), patch(
+            "acestep.gpu_config.cuda_supports_bfloat16",
+            return_value=True,
+        ), patch.dict("os.environ", {"ACESTEP_DTYPE": "float32"}):
+            from acestep.gpu_config import resolve_compute_dtype
+
+            self.assertEqual(resolve_compute_dtype("cuda"), torch.float32)
+
+
 if __name__ == "__main__":
     unittest.main()

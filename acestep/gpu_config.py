@@ -121,6 +121,110 @@ def cuda_supports_bfloat16(device_index: int | None = None) -> bool:
         return False
 
 
+_TORCH_DTYPE_ALIASES: Dict[str, str] = {
+    "float32": "float32",
+    "fp32": "float32",
+    "float16": "float16",
+    "fp16": "float16",
+    "bfloat16": "bfloat16",
+    "bf16": "bfloat16",
+}
+
+
+def parse_torch_dtype_env(env_var: str, default: Optional[str] = None) -> Optional["torch.dtype"]:
+    """Parse a torch dtype from an environment variable name.
+
+    Args:
+        env_var: Environment variable to read (for example ``ACESTEP_DTYPE``).
+        default: Fallback string when the variable is unset or empty.
+
+    Returns:
+        Parsed ``torch.dtype``, or ``None`` when no usable value is present.
+    """
+    import torch
+
+    raw = (os.environ.get(env_var) or default or "").strip().lower()
+    if not raw:
+        return None
+    canonical = _TORCH_DTYPE_ALIASES.get(raw)
+    if canonical is None:
+        logger.warning(
+            "[gpu_config] Unknown {}={!r}; supported values: float32, float16, bfloat16.",
+            env_var,
+            raw,
+        )
+        return None
+    return getattr(torch, canonical)
+
+
+def resolve_rocm_compute_dtype() -> "torch.dtype":
+    """Return a safe compute dtype for ROCm/HIP devices.
+
+    Defaults to ``float32``. Override with ``ACESTEP_ROCM_DTYPE`` (``float16`` or
+    ``bfloat16``) on hardware with verified kernel support.
+    """
+    import torch
+
+    dtype = parse_torch_dtype_env("ACESTEP_ROCM_DTYPE", default="float32")
+    if dtype is None:
+        logger.warning(
+            "[gpu_config] Invalid ACESTEP_ROCM_DTYPE; falling back to float32."
+        )
+        return torch.float32
+    return dtype
+
+
+def _cuda_device_index_from_name(device: str) -> int:
+    """Return CUDA index encoded in a device string like ``cuda:1``."""
+    if device.startswith("cuda:"):
+        try:
+            return int(device.split(":", 1)[1])
+        except ValueError:
+            return 0
+    return 0
+
+
+def resolve_compute_dtype(device: str, device_index: int | None = None) -> "torch.dtype":
+    """Resolve DiT/handler compute dtype from device capabilities and env overrides.
+
+    Precedence:
+    1. ``ACESTEP_DTYPE`` when set (applies to all backends).
+    2. CUDA ROCm: ``ACESTEP_ROCM_DTYPE`` (default ``float32``).
+    3. CUDA Ampere+ (CC >= 8.0): ``bfloat16``.
+    4. CUDA pre-Ampere: ``float32`` (``float16`` overflows with lyric conditioning).
+    5. Intel XPU: ``bfloat16``.
+    6. Otherwise: ``float32``.
+
+    Args:
+        device: Resolved runtime device string (``cuda``, ``cuda:0``, ``cpu``, etc.).
+        device_index: Optional CUDA index override.
+
+    Returns:
+        Selected ``torch.dtype`` for model weights and activations.
+    """
+    import torch
+
+    env_dtype = parse_torch_dtype_env("ACESTEP_DTYPE")
+    if env_dtype is not None:
+        return env_dtype
+
+    device_type = device.split(":", 1)[0]
+    if device_type == "cuda":
+        if is_rocm_available():
+            return resolve_rocm_compute_dtype()
+        cuda_index = device_index if device_index is not None else _cuda_device_index_from_name(device)
+        if cuda_supports_bfloat16(cuda_index):
+            return torch.bfloat16
+        logger.info(
+            "[gpu_config] Pre-Ampere CUDA detected (CC < 8.0): using float32 for "
+            "DiT/lyric numerical stability. Set ACESTEP_DTYPE=float16 to override."
+        )
+        return torch.float32
+    if device_type == "xpu":
+        return torch.bfloat16
+    return torch.float32
+
+
 def get_cuda_device_capability(device_index: int = 0) -> Optional[Tuple[int, int]]:
     """Return the active CUDA device capability tuple when available."""
     try:

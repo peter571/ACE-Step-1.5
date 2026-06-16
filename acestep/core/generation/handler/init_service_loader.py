@@ -144,15 +144,15 @@ class InitServiceLoaderMixin(InitServiceLoaderComponentsMixin):
         if use_flash_attention and self.is_flash_attention_available(device):
             attn_implementation = "flash_attention_2"
         elif device == "cuda" and not gpu_config.cuda_supports_bfloat16():
-            # Pre-Ampere GPUs (compute capability < 8.0) run in float16 which
-            # can overflow in SDPA's fused softmax with longer sequences,
-            # producing NaN/Inf latents (see issues #924, #927).  Eager
-            # attention upcasts to float32 for softmax, avoiding the overflow.
-            logger.info(
-                "[initialize_service] Pre-Ampere CUDA detected: using eager "
-                "attention for float16 numerical stability."
-            )
-            attn_implementation = "eager"
+            # Pre-Ampere GPUs default to float32 compute dtype (see
+            # resolve_compute_dtype).  When ACESTEP_DTYPE=float16 is forced,
+            # eager attention upcasts softmax to float32 to reduce overflow.
+            if self.dtype == torch.float16:
+                logger.info(
+                    "[initialize_service] Pre-Ampere CUDA with float16: using eager "
+                    "attention for numerical stability."
+                )
+                attn_implementation = "eager"
         else:
             if use_flash_attention:
                 logger.warning(

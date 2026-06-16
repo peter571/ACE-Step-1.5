@@ -76,7 +76,8 @@ class GenerateMusicDecodeMixin:
                 "  2. Checkpoint/config mismatch — verify model checkpoints match this release.",
                 "  3. Unsupported quantization/backend — try running with --backend pt.",
                 "  4. CPU offload left parameters on wrong device — restart and regenerate.",
-                "  5. Float16 overflow on pre-Ampere GPU — set ACESTEP_DTYPE=float32.",
+                "  5. Float16 overflow on pre-Ampere GPU (T4/V100) — restart with "
+                "ACESTEP_DTYPE=float32 (auto-default on CC < 8.0 since v1.5).",
             ]
             raise RuntimeError("\n".join(hints))
         if pred_latents.numel() > 0 and pred_latents.abs().sum() == 0:
