@@ -623,6 +623,92 @@ class InitServiceMixinTests(unittest.TestCase):
         self.assertIsNotNone(host.model)
         self.assertIsNotNone(host.silence_latent)
 
+    def test_load_main_model_pre_ampere_float32_uses_sdpa(self):
+        """Pre-Ampere CUDA with float32 must pick SDPA without UnboundLocalError."""
+        host = _Host(project_root="K:/fake_root", device="cuda")
+        host.dtype = torch.float32
+        host.offload_to_cpu = True
+        host.offload_dit_to_cpu = True
+
+        class _DummyModel:
+            """Minimal model stub matching loader expectations."""
+
+            def __init__(self):
+                self.config = types.SimpleNamespace(_attn_implementation="sdpa")
+
+            def to(self, *_args, **_kwargs):
+                return self
+
+            def eval(self):
+                return self
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = os.path.join(tmpdir, "acestep-v15-turbo")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(torch.zeros(1, 1, 1), os.path.join(checkpoint_dir, "silence_latent.pt"))
+
+            with patch("torch.cuda.is_available", return_value=True), \
+                    patch("torch.cuda.empty_cache"), \
+                    patch("torch.cuda.synchronize"), \
+                    patch.object(GPU_CONFIG_MODULE, "cuda_supports_bfloat16", return_value=False), \
+                    patch("transformers.AutoModel.from_pretrained", return_value=_DummyModel()), \
+                    patch.object(host, "is_flash_attention_available", return_value=False), \
+                    patch.object(host, "_sync_alignment_config", create=True), \
+                    patch.object(host, "_apply_cuda_bool_argsort_workaround", create=True), \
+                    patch.object(host, "_apply_dit_quantization", create=True):
+                attn = host._load_main_model_from_checkpoint(
+                    model_checkpoint_path=checkpoint_dir,
+                    device="cuda",
+                    use_flash_attention=False,
+                    compile_model=False,
+                    quantization=None,
+                )
+
+        self.assertEqual(attn, "sdpa")
+
+    def test_load_main_model_pre_ampere_float16_uses_eager(self):
+        """Forced float16 on pre-Ampere CUDA should keep eager attention."""
+        host = _Host(project_root="K:/fake_root", device="cuda")
+        host.dtype = torch.float16
+        host.offload_to_cpu = True
+        host.offload_dit_to_cpu = True
+
+        class _DummyModel:
+            """Minimal model stub matching loader expectations."""
+
+            def __init__(self):
+                self.config = types.SimpleNamespace(_attn_implementation="eager")
+
+            def to(self, *_args, **_kwargs):
+                return self
+
+            def eval(self):
+                return self
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            checkpoint_dir = os.path.join(tmpdir, "acestep-v15-turbo")
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            torch.save(torch.zeros(1, 1, 1), os.path.join(checkpoint_dir, "silence_latent.pt"))
+
+            with patch("torch.cuda.is_available", return_value=True), \
+                    patch("torch.cuda.empty_cache"), \
+                    patch("torch.cuda.synchronize"), \
+                    patch.object(GPU_CONFIG_MODULE, "cuda_supports_bfloat16", return_value=False), \
+                    patch("transformers.AutoModel.from_pretrained", return_value=_DummyModel()), \
+                    patch.object(host, "is_flash_attention_available", return_value=False), \
+                    patch.object(host, "_sync_alignment_config", create=True), \
+                    patch.object(host, "_apply_cuda_bool_argsort_workaround", create=True), \
+                    patch.object(host, "_apply_dit_quantization", create=True):
+                attn = host._load_main_model_from_checkpoint(
+                    model_checkpoint_path=checkpoint_dir,
+                    device="cuda",
+                    use_flash_attention=False,
+                    compile_model=False,
+                    quantization=None,
+                )
+
+        self.assertEqual(attn, "eager")
+
     def test_apply_cuda_bool_argsort_workaround_patches_pack_sequences(self):
         """It monkey-patches dynamic ``pack_sequences`` when CUDA bool argsort is unsupported."""
         host = _Host(project_root="K:/fake_root", device="cuda")

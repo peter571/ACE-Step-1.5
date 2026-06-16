@@ -153,6 +153,8 @@ class InitServiceLoaderMixin(InitServiceLoaderComponentsMixin):
                     "attention for numerical stability."
                 )
                 attn_implementation = "eager"
+            else:
+                attn_implementation = "sdpa"
         else:
             if use_flash_attention:
                 logger.warning(
